@@ -20,7 +20,6 @@ module.exports = class BundlePersist {
     this.dir = this.fs.join(this.root, this.otaDir)
     this._pending = null
     this._ready = false
-    this._apply = false
     this._write = debounceify(this._write.bind(this))
   }
 
@@ -46,9 +45,13 @@ module.exports = class BundlePersist {
     return Version.parse(this.currentVersion).compare(Version.parse(minver)) >= 0
   }
 
-  apply() {
-    this._apply = true
-    return this._write()
+  async apply() {
+    await this._write()
+    if (!this._ready) return false
+
+    this._ready = false
+    await this.fs.commitDir(this.fs.join(this.root, this.stagingDir), this.dir)
+    return true
   }
 
   async savedVersion() {
@@ -68,19 +71,6 @@ module.exports = class BundlePersist {
   }
 
   async _write() {
-    const apply = this._apply
-    this._apply = false
-
-    await this._stage()
-
-    if (!apply || !this._ready) return false
-
-    this._ready = false
-    await this.fs.commitDir(this.fs.join(this.root, this.stagingDir), this.dir)
-    return true
-  }
-
-  async _stage() {
     const pending = this._pending
     if (pending === null) return
 
