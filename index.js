@@ -6,6 +6,11 @@ const fs = require('#fs')
 
 module.exports = class BundlePersist {
   constructor(opts = {}) {
+    if (opts.currentVersion !== undefined && !isValidVersion(opts.currentVersion)) {
+      throw new Error(`Invalid current version: ${opts.currentVersion}`)
+    }
+
+    this.currentVersion = opts.currentVersion
     this.fs = opts.fs || fs
     this.root = opts.root || this.fs.root()
     this.otaDir = opts.otaDir || 'ota'
@@ -19,15 +24,26 @@ module.exports = class BundlePersist {
     this._write = debounceify(this._write.bind(this))
   }
 
-  save(bundle, version, opts = {}) {
+  async save(bundle, version, opts = {}) {
     const assets = opts.assets || {}
+    const minver = opts.minver
 
     if (!isValidVersion(version)) {
-      return Promise.reject(new Error(`Invalid bundle version: ${version}`))
+      throw new Error(`Invalid bundle version: ${version}`)
     }
 
-    this._pending = { bundle, version, assets }
-    return this._write()
+    if (!this.isCompatible(minver)) return false
+
+    this._pending = { bundle, version, minver, assets }
+    await this._write()
+    return true
+  }
+
+  isCompatible(minver) {
+    if (minver === undefined) return true
+    if (!isValidVersion(minver)) throw new Error(`Invalid minimum version: ${minver}`)
+    if (this.currentVersion === undefined) throw new Error('currentVersion is required with minver')
+    return Version.parse(this.currentVersion).compare(Version.parse(minver)) >= 0
   }
 
   async apply() {
@@ -75,7 +91,7 @@ module.exports = class BundlePersist {
     this._pending = null
     this._ready = false
 
-    const { bundle, version, assets } = pending
+    const { bundle, version, minver, assets } = pending
     const fs = this.fs
     const staging = fs.join(this.root, this.stagingDir)
 
@@ -94,7 +110,7 @@ module.exports = class BundlePersist {
       await fs.writeFile(fs.join(dir, name), bytes)
     }
 
-    await fs.writeFile(fs.join(staging, this.manifestFile), JSON.stringify({ version }))
+    await fs.writeFile(fs.join(staging, this.manifestFile), JSON.stringify({ version, minver }))
     this._ready = true
   }
 }

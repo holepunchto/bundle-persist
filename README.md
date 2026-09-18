@@ -15,15 +15,21 @@ npm install bundle-persist
 ```js
 const BundlePersist = require('bundle-persist')
 
-const bundles = new BundlePersist()
+const bundles = new BundlePersist({ currentVersion: '4.23.0' })
 
-await bundles.save(bundle, '4.24.0', { assets })
+const isCompatible = await bundles.save(bundle, '4.24.0', { minver: '4.23.0', assets })
 
 // When ready to restart the app:
-if (await bundles.apply()) await restartApp()
+if (isCompatible && (await bundles.apply())) await restartApp()
 ```
 
 `restartApp()` is supplied by the app. `save()` only stages the update and leaves the active bundle and assets untouched. Call `apply()` immediately before restarting: it replaces the files that the running bundle may still reference.
+
+`currentVersion` is the installed native app's release version. Set `minver` to the release version that includes the native changes required by the update. A newer OTA JavaScript version does not change this compatibility baseline.
+
+`save()` returns `false` when `currentVersion < minver`, without changing the applied, staged or queued update. Compatible saves return `true` after staging completes. Invalid versions and filesystem errors reject. `minver` is optional; when supplied, it requires `currentVersion` and is saved in the manifest. Both must be full semver versions, with prerelease precedence respected and build metadata ignored when comparing.
+
+`bundles.isCompatible(minver)` performs the same check synchronously without saving. It returns a boolean and throws for an invalid minimum version or a missing compatibility baseline. Omitting `minver` returns `true`.
 
 - **React Native** resolves the `expo-file-system` adapter and defaults to Application Support on iOS and the app's files directory on Android.
 - **Bare** resolves the `bare-fs` adapter and defaults to `require('bare-storage').persistent()`.
@@ -36,12 +42,13 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 
 ### API
 
-| Call                                              | Result                                                                                                                                                     |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new BundlePersist({ root, fs })`                 | An instance bound to one storage directory. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below.                              |
-| `await bundles.save(bundle, version, { assets })` | Stages the update without applying it. Rejects on a version that isn't semver. Saves never run in parallel, and waiting saves coalesce to the latest call. |
-| `await bundles.apply()`                           | Waits for staging, then commits the staged update. Returns `true` when applied, or `false` when no complete update is pending.                             |
-| `await bundles.savedVersion()`                    | The applied version available to native boot, or `null` when nothing complete is applied. Staging does not change it.                                      |
+| Call                                                      | Result                                                                                                                                                               |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new BundlePersist({ currentVersion, root, fs })`         | An instance bound to one storage directory and an optional compatibility baseline. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below. |
+| `bundles.isCompatible(minver)`                            | Returns whether the installed app meets the minimum version, without accessing the filesystem.                                                                       |
+| `await bundles.save(bundle, version, { minver, assets })` | Returns `true` after compatible staging completes, or `false` when the installed app is below `minver`. Waiting compatible saves coalesce to the latest call.        |
+| `await bundles.apply()`                                   | Waits for staging, then commits the staged update. Returns `true` when applied, or `false` when no complete update is pending.                                       |
+| `await bundles.savedVersion()`                            | The applied version available to native boot, or `null` when nothing complete is applied. Staging does not change it.                                                |
 
 ## On-disk layout
 
@@ -49,12 +56,12 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 <root>/ota/
 ├── app.bundle      the React Native bundle
 ├── assets/ …       whatever the bundle references
-└── manifest.json   { "version": "4.24.0" }
+└── manifest.json   { "version": "4.24.0", "minver": "4.23.0" }
 ```
 
 `save()` builds the update in `<root>/ota.tmp/` and finishes it with `manifest.json`. Only `apply()` promotes that directory to `<root>/ota/` through the adapter's `commitDir(from, to)` method. Native boot continues reading the applied directory until then.
 
-Staging and commits share one queue, so a save cannot modify the staging directory during a commit. Saves received before the commit runs can replace the pending update. `apply()` does not restart the app; the caller controls that step. Use one writer instance per root, and stop accepting new updates when beginning the restart flow.
+Staging and commits share one queue, so a save cannot modify the staging directory during a commit. Compatible saves received before the commit runs can replace the pending update. Coalesced calls return `true` when their shared staging work completes; only the latest bundle in that batch is retained. `apply()` does not restart the app; the caller controls that step. Use one writer instance per root, and stop accepting new updates when beginning the restart flow.
 
 Failures reject the operation's promise without blocking later operations. An unsuccessful staging operation cannot be applied. After a failed commit, save the bundle again before retrying `apply()`: a filesystem adapter may have already moved the directories before reporting an error. Pending state is in memory; after a process restart, an unapplied update must be supplied again.
 

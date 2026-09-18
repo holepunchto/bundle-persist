@@ -23,7 +23,10 @@ test('save stages the bundle, manifest and assets until apply', async (t) => {
   const root = await tmp(t)
   const bundles = new BundlePersist({ root })
 
-  await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/src/logo.png': b4a.from([9]) } })
+  t.is(
+    await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/src/logo.png': b4a.from([9]) } }),
+    true
+  )
 
   t.is(await bundles.savedVersion(), null)
   t.absent(await exists(path.join(root, 'ota')))
@@ -47,6 +50,90 @@ test('save accepts a prerelease version', async (t) => {
   await bundles.apply()
 
   t.is(await bundles.savedVersion(), '4.24.0-nightly.3')
+})
+
+test('save checks minver using semver precedence and persists it when compatible', async (t) => {
+  for (const [currentVersion, minver, compatible] of [
+    ['4.24.0', '4.23.0', true],
+    ['4.24.0', '4.24.0', true],
+    ['4.24.0', '4.25.0', false],
+    ['4.24.0-nightly.2', '4.24.0-nightly.3', false],
+    ['4.24.0-nightly.3', '4.24.0-nightly.2', true],
+    ['4.24.0-nightly.3', '4.24.0', false],
+    ['4.24.0+native', '4.24.0+other', true]
+  ]) {
+    const root = await tmp(t)
+    const bundles = new BundlePersist({ root, currentVersion })
+
+    t.is(bundles.isCompatible(minver), compatible)
+    t.alike(await fs.readdir(root), [], 'compatibility check writes no files')
+    t.is(await bundles.save(BUNDLE, '4.26.0', { minver }), compatible)
+    if (compatible) {
+      t.alike(JSON.parse(await fs.readFile(path.join(root, 'ota.tmp', 'manifest.json'), 'utf8')), {
+        version: '4.26.0',
+        minver
+      })
+    } else {
+      t.alike(await fs.readdir(root), [], 'incompatible update writes no files')
+    }
+    t.is(await bundles.apply(), compatible)
+  }
+})
+
+test('currentVersion and minver must be valid semver when supplied', async (t) => {
+  const root = await tmp(t)
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
+
+  t.is(bundles.isCompatible(), true)
+  t.is(new BundlePersist({ root }).isCompatible(), true)
+
+  for (const version of ['latest', '4.24', '', null, 4]) {
+    t.exception(
+      () => new BundlePersist({ root, currentVersion: version }),
+      /Invalid current version/
+    )
+    t.exception(() => bundles.isCompatible(version), /Invalid minimum version/)
+    await t.exception(
+      bundles.save(BUNDLE, '4.25.0', { minver: version }),
+      /Invalid minimum version/
+    )
+  }
+
+  t.exception(
+    () => new BundlePersist({ root }).isCompatible('4.24.0'),
+    /currentVersion is required/
+  )
+  await t.exception(
+    new BundlePersist({ root }).save(BUNDLE, '4.25.0', { minver: '4.24.0' }),
+    /currentVersion is required/
+  )
+  t.alike(await fs.readdir(root), [])
+})
+
+test('an incompatible update preserves the active and staged bundles', async (t) => {
+  const root = await tmp(t)
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
+
+  await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([1]) } })
+  await bundles.apply()
+  await bundles.save(b4a.from([4]), '4.25.0', {
+    minver: '4.24.0',
+    assets: { 'assets/new.png': b4a.from([2]) }
+  })
+
+  t.is(await bundles.save(b4a.from([5]), '4.26.0', { minver: '4.25.0' }), false)
+  t.is(await bundles.savedVersion(), '4.24.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+  t.ok(b4a.equals(await read(root, 'assets/old.png'), b4a.from([1])))
+  t.ok(b4a.equals(await fs.readFile(path.join(root, 'ota.tmp', 'app.bundle')), b4a.from([4])))
+
+  t.is(await bundles.apply(), true)
+  t.is(await bundles.savedVersion(), '4.25.0')
+  t.ok(b4a.equals(await read(root, 'assets/new.png'), b4a.from([2])))
+  t.alike(JSON.parse(b4a.toString(await read(root, 'manifest.json'))), {
+    version: '4.25.0',
+    minver: '4.24.0'
+  })
 })
 
 test('save preserves the running bundle and assets until apply', async (t) => {
@@ -83,15 +170,18 @@ test('save rejects a version that is not semver and keeps what is stored', async
   t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
 })
 
-test('overlapping saves write only the newest bundle', async (t) => {
+test('overlapping saves return compatibility and write only the newest compatible bundle', async (t) => {
   const root = await tmp(t)
-  const bundles = new BundlePersist({ root })
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
 
-  await Promise.all([
+  const results = await Promise.all([
     bundles.save(b4a.from([1]), '4.24.0'),
-    bundles.save(b4a.from([2]), '4.25.0'),
-    bundles.save(b4a.from([3]), '4.26.0')
+    bundles.save(b4a.from([8]), '4.25.0', { minver: '4.25.0' }),
+    bundles.save(b4a.from([2]), '4.25.0', { minver: '4.23.0' }),
+    bundles.save(b4a.from([3]), '4.26.0', { minver: '4.24.0' }),
+    bundles.save(b4a.from([9]), '4.27.0', { minver: '4.25.0' })
   ])
+  t.alike(results, [true, false, true, true, false])
   await bundles.apply()
 
   t.is(await bundles.savedVersion(), '4.26.0')
