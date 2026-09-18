@@ -20,9 +20,14 @@ const bundles = new BundlePersist()
 await bundles.save(bundle, '4.24.0', { assets })
 ```
 
-- **React Native** resolves the `expo-file-system` adapter and defaults the storage root to the documents directory.
-- **Bare** resolves the `bare-fs` adapter and has no default root, so pass one: `new BundlePersist({ root })`.
+- **React Native** resolves the `expo-file-system` adapter and defaults to Application Support on iOS and the app's files directory on Android.
+- **Bare** resolves the `bare-fs` adapter and defaults to `require('bare-storage').persistent()`.
+- **Node.js** requires an explicit root: `new BundlePersist({ root })`.
 - Tests pass their own adapter: `new BundlePersist({ fs, root })`.
+
+The mobile defaults target the same app directory from both runtimes: `<sandbox>/Library/Application Support` on iOS and the app's `filesDir` on Android. Bare uses filesystem paths; Expo uses `file://` URIs. An explicit `root` overrides the default.
+
+The app's native boot code must use `.applicationSupportDirectory` on iOS and `context.filesDir` on Android, with `ota/app.bundle` and `ota/manifest.json` below that root. Existing files in iOS Documents are not moved automatically.
 
 ### API
 

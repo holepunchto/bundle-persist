@@ -159,8 +159,12 @@ function tryRequire(id) {
   }
 }
 
-test('constructing without a root throws', async (t) => {
-  t.exception(() => new BundlePersist(), /No storage root/)
+test('default root follows the runtime', async (t) => {
+  if (require('#fs') === require('../lib/fs.js')) {
+    t.exception(() => new BundlePersist(), /No storage root/)
+  } else {
+    t.is(new BundlePersist().root, require('bare-storage').persistent())
+  }
 })
 
 async function exists(target) {

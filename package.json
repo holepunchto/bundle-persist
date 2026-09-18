@@ -42,14 +42,19 @@
     "bare-fs": "^4.8.1",
     "bare-path": "^3.1.2",
     "bare-semver": "^1.1.0",
+    "bare-storage": "^1.1.0",
     "debounceify": "^1.1.0",
     "fs-native-extensions": "^1.5.1"
   },
   "peerDependencies": {
-    "expo-file-system": ">=56"
+    "expo-file-system": ">=56",
+    "react-native": "*"
   },
   "peerDependenciesMeta": {
     "expo-file-system": {
+      "optional": true
+    },
+    "react-native": {
       "optional": true
     }
   },
