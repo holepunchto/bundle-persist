@@ -230,6 +230,109 @@ test('apply waits for an in-flight save', async (t) => {
   t.is(await bundles.savedVersion(), '4.24.0')
 })
 
+test('apply stages and commits the latest waiting save', async (t) => {
+  const root = await tmp(t)
+  const io = require('#fs')
+  const writing = deferred()
+  const release = deferred()
+  const staged = []
+  const bundles = new BundlePersist({
+    root,
+    fs: {
+      ...io,
+      async writeFile(target, data) {
+        if (target.endsWith('app.bundle')) {
+          staged.push(data[0])
+          if (data[0] === 1) {
+            writing.resolve()
+            await release.promise
+          }
+        }
+        return io.writeFile(target, data)
+      }
+    }
+  })
+
+  const first = bundles.save(b4a.from([1]), '4.24.0')
+  await writing.promise
+  const applying = bundles.apply()
+  const second = bundles.save(b4a.from([2]), '4.25.0')
+  const latest = bundles.save(b4a.from([3]), '4.26.0')
+  release.resolve()
+
+  t.alike(await Promise.all([first, applying, second, latest]), [true, true, true, true])
+  t.alike(staged, [1, 3])
+  t.is(await bundles.savedVersion(), '4.26.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([3])))
+  t.is(await bundles.apply(), false)
+})
+
+test('a save arriving during apply staging reports its own failure', async (t) => {
+  const root = await tmp(t)
+  const io = require('#fs')
+  const writing = [deferred(), deferred()]
+  const release = [deferred(), deferred()]
+  const bundles = new BundlePersist({
+    root,
+    fs: {
+      ...io,
+      async writeFile(target, data) {
+        if (target.endsWith('app.bundle')) {
+          if (data[0] === 3) throw new Error('later save failed')
+          writing[data[0] - 1].resolve()
+          await release[data[0] - 1].promise
+        }
+        return io.writeFile(target, data)
+      }
+    }
+  })
+
+  const first = bundles.save(b4a.from([1]), '4.24.0')
+  await writing[0].promise
+  const applying = bundles.apply()
+  const second = bundles.save(b4a.from([2]), '4.25.0')
+  release[0].resolve()
+  await writing[1].promise
+  const latest = t.exception(bundles.save(b4a.from([3]), '4.26.0'), /later save failed/)
+  release[1].resolve()
+
+  t.alike(await Promise.all([first, applying, second]), [true, true, true])
+  await latest
+  t.is(await bundles.savedVersion(), '4.25.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([2])))
+  t.is(await bundles.apply(), false)
+})
+
+test('concurrent applies commit a staged bundle only once', async (t) => {
+  const root = await tmp(t)
+  const io = require('#fs')
+  const committing = deferred()
+  const release = deferred()
+  let commits = 0
+  const bundles = new BundlePersist({
+    root,
+    fs: {
+      ...io,
+      async commitDir(from, to) {
+        commits++
+        committing.resolve()
+        await release.promise
+        return io.commitDir(from, to)
+      }
+    }
+  })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  const first = bundles.apply()
+  await committing.promise
+  const second = bundles.apply()
+  release.resolve()
+
+  t.alike(await Promise.all([first, second]), [true, false])
+  t.is(commits, 1)
+  t.is(await bundles.savedVersion(), '4.24.0')
+})
+
 test('apply and a queued save both report staging failure and recover', async (t) => {
   const root = await tmp(t)
   const io = require('#fs')

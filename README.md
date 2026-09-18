@@ -27,7 +27,7 @@ if (isCompatible && (await bundles.apply())) await restartApp()
 
 `currentVersion` is the installed native app's release version. Set `minver` to the release version that includes the native changes required by the update. A newer OTA JavaScript version does not change this compatibility baseline.
 
-`save()` returns `false` when `currentVersion < minver`, without changing the applied, staged or queued update. Compatible saves return `true` after staging completes. Invalid versions and filesystem errors reject. `minver` is optional; when supplied, it requires `currentVersion` and is saved in the manifest. Both must be full semver versions, with prerelease precedence respected and build metadata ignored when comparing.
+`save()` returns `false` when `currentVersion < minver`, without changing the applied, staged or pending update. Compatible saves return `true` after staging completes. Invalid versions and filesystem errors reject. `minver` is optional; when supplied, it requires `currentVersion` and is saved in the manifest. Both must be full semver versions, with prerelease precedence respected and build metadata ignored when comparing.
 
 `bundles.isCompatible(minver)` performs the same check synchronously without saving. It returns a boolean and throws for an invalid minimum version or a missing compatibility baseline. Omitting `minver` returns `true`.
 
@@ -47,7 +47,7 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 | `new BundlePersist({ currentVersion, root, fs })`         | An instance bound to one storage directory and an optional compatibility baseline. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below. |
 | `bundles.isCompatible(minver)`                            | Returns whether the installed app meets the minimum version, without accessing the filesystem.                                                                       |
 | `await bundles.save(bundle, version, { minver, assets })` | Returns `true` after compatible staging completes, or `false` when the installed app is below `minver`. Waiting compatible saves coalesce to the latest call.        |
-| `await bundles.apply()`                                   | Waits for staging, then commits the staged update. Returns `true` when applied, or `false` when no complete update is pending.                                       |
+| `await bundles.apply()`                                   | Applies the latest update available when its debounced pass starts. Returns `true` when applied, or `false` when no complete update is pending.                      |
 | `await bundles.savedVersion()`                            | The applied version available to native boot, or `null` when nothing complete is applied. Staging does not change it.                                                |
 
 ## On-disk layout
@@ -61,7 +61,9 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 
 `save()` builds the update in `<root>/ota.tmp/` and finishes it with `manifest.json`. Only `apply()` promotes that directory to `<root>/ota/` through the adapter's `commitDir(from, to)` method. Native boot continues reading the applied directory until then.
 
-Staging and commits share one queue, so a save cannot modify the staging directory during a commit. Compatible saves received before the commit runs can replace the pending update. Coalesced calls return `true` when their shared staging work completes; only the latest bundle in that batch is retained. `apply()` does not restart the app; the caller controls that step. Use one writer instance per root, and stop accepting new updates when beginning the restart flow.
+Saves and applies use one debounced worker. Waiting saves coalesce to the latest compatible bundle; there is no separate operation queue. `apply()` selects the latest pending update when its pass starts, stages it if necessary, then commits it. Saves arriving during that pass run afterward and require another `apply()`. This keeps staging from overlapping a commit.
+
+Coalesced saves return `true` when their shared work completes; only the latest bundle in that batch is retained. `apply()` does not restart the app; the caller controls that step. Use one writer instance per root, and stop accepting new updates when beginning the restart flow.
 
 Failures reject the operation's promise without blocking later operations. An unsuccessful staging operation cannot be applied. After a failed commit, save the bundle again before retrying `apply()`: a filesystem adapter may have already moved the directories before reporting an error. Pending state is in memory; after a process restart, an unapplied update must be supplied again.
 
