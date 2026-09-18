@@ -18,7 +18,12 @@ const BundlePersist = require('bundle-persist')
 const bundles = new BundlePersist()
 
 await bundles.save(bundle, '4.24.0', { assets })
+
+// When ready to restart the app:
+if (await bundles.apply()) await restartApp()
 ```
+
+`restartApp()` is supplied by the app. `save()` only stages the update and leaves the active bundle and assets untouched. Call `apply()` immediately before restarting: it replaces the files that the running bundle may still reference.
 
 - **React Native** resolves the `expo-file-system` adapter and defaults to Application Support on iOS and the app's files directory on Android.
 - **Bare** resolves the `bare-fs` adapter and defaults to `require('bare-storage').persistent()`.
@@ -31,11 +36,12 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 
 ### API
 
-| Call                                              | Result                                                                                                                                                  |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new BundlePersist({ root, fs })`                 | An instance bound to one storage directory. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below.                           |
-| `await bundles.save(bundle, version, { assets })` | Writes the update. Rejects on a version that isn't semver. Saves never run in parallel, and when several are waiting only the newest bundle is written. |
-| `await bundles.savedVersion()`                    | The stored version, or `null` when nothing complete is stored.                                                                                          |
+| Call                                              | Result                                                                                                                                                     |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new BundlePersist({ root, fs })`                 | An instance bound to one storage directory. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below.                              |
+| `await bundles.save(bundle, version, { assets })` | Stages the update without applying it. Rejects on a version that isn't semver. Saves never run in parallel, and waiting saves coalesce to the latest call. |
+| `await bundles.apply()`                           | Waits for staging, then commits the staged update. Returns `true` when applied, or `false` when no complete update is pending.                             |
+| `await bundles.savedVersion()`                    | The applied version available to native boot, or `null` when nothing complete is applied. Staging does not change it.                                      |
 
 ## On-disk layout
 
@@ -46,9 +52,13 @@ The app's native boot code must use `.applicationSupportDirectory` on iOS and `c
 └── manifest.json   { "version": "4.24.0" }
 ```
 
-`save` always builds the update in a staging directory and finishes it with `manifest.json`, so nothing incomplete can become the stored update. Promoting that directory is a single adapter call, `commitDir(from, to)`, and how much it guarantees depends on the runtime.
+`save()` builds the update in `<root>/ota.tmp/` and finishes it with `manifest.json`. Only `apply()` promotes that directory to `<root>/ota/` through the adapter's `commitDir(from, to)` method. Native boot continues reading the applied directory until then.
 
-**Under Bare** the save is atomic and durable. Every file is fsynced as it is written, the staging directory's entries are fsynced before the swap, and the parent directory after it, so nothing about the new update can reach disk out of order. The two directories are exchanged with `fs-native-extensions`' `swap()`, a single atomic operation on macOS, Linux and Android. Across a crash or a power cut, the stored update is either entirely the old one or entirely the new one.
+Staging and commits share one queue, so a save cannot modify the staging directory during a commit. Saves received before the commit runs can replace the pending update. `apply()` does not restart the app; the caller controls that step. Use one writer instance per root, and stop accepting new updates when beginning the restart flow.
+
+Failures reject the operation's promise without blocking later operations. An unsuccessful staging operation cannot be applied. After a failed commit, save the bundle again before retrying `apply()`: a filesystem adapter may have already moved the directories before reporting an error. Pending state is in memory; after a process restart, an unapplied update must be supplied again.
+
+**Under Bare** applying uses the atomic swap adapter. Files are fsynced during staging, the staging directory before the swap, and the parent directory afterward. Existing directories are exchanged with `fs-native-extensions`' `swap()`; the first apply uses a rename.
 
 **Everywhere else** `commitDir` is a delete followed by a rename. The rename itself is atomic, so a reader never sees a mixture, but two gaps remain that `expo-file-system` cannot close: a crash between the two steps loses an update that was working, and nothing can be fsynced, so a power cut can leave a manifest that outlived the bundle it describes.
 

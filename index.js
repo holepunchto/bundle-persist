@@ -14,6 +14,8 @@ module.exports = class BundlePersist {
     this.manifestFile = opts.manifestFile || 'manifest.json'
     this.dir = this.fs.join(this.root, this.otaDir)
     this._pending = null
+    this._ready = false
+    this._saving = Promise.resolve()
     this._write = debounceify(this._write.bind(this))
   }
 
@@ -26,6 +28,18 @@ module.exports = class BundlePersist {
 
     this._pending = { bundle, version, assets }
     return this._write()
+  }
+
+  async apply() {
+    await this._write()
+
+    return this._queue(async () => {
+      if (!this._ready) return false
+
+      this._ready = false
+      await this.fs.commitDir(this.fs.join(this.root, this.stagingDir), this.dir)
+      return true
+    })
   }
 
   async savedVersion() {
@@ -44,11 +58,22 @@ module.exports = class BundlePersist {
     }
   }
 
-  async _write() {
+  _queue(operation) {
+    const result = this._saving.then(operation)
+    this._saving = result.catch(() => {})
+    return result
+  }
+
+  _write() {
+    return this._queue(() => this._stage())
+  }
+
+  async _stage() {
     const pending = this._pending
     if (pending === null) return
 
     this._pending = null
+    this._ready = false
 
     const { bundle, version, assets } = pending
     const fs = this.fs
@@ -70,7 +95,7 @@ module.exports = class BundlePersist {
     }
 
     await fs.writeFile(fs.join(staging, this.manifestFile), JSON.stringify({ version }))
-    await fs.commitDir(staging, this.dir)
+    this._ready = true
   }
 }
 
