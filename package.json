@@ -1,0 +1,56 @@
+{
+  "name": "bundle-persist",
+  "version": "0.0.1",
+  "description": "Persists React Native bundles on disk",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "imports": {
+    "#fs": {
+      "bare": "./lib/fs-bare.js",
+      "react-native": "./lib/fs-expo.js",
+      "default": "./lib/fs.js"
+    },
+    "fs/promises": {
+      "bare": "bare-fs/promises",
+      "default": "fs/promises"
+    },
+    "path": {
+      "bare": "bare-path",
+      "default": "path"
+    }
+  },
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "scripts": {
+    "test": "brittle-bare test/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/holepunchto/bundle-persist.git"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "bare-fs": "^4.8.1",
+    "bare-path": "^3.1.2",
+    "bare-semver": "^1.1.0",
+    "debounceify": "^1.1.0",
+    "fs-native-extensions": "^1.5.1"
+  },
+  "peerDependencies": {
+    "expo-file-system": ">=56"
+  },
+  "peerDependenciesMeta": {
+    "expo-file-system": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "b4a": "^1.9.0",
+    "brittle": "^4.2.0"
+  }
+}
