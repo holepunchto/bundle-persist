@@ -26,11 +26,11 @@ await bundles.save(bundle, '4.24.0', { assets })
 
 ### API
 
-| Call | Result |
-|---|---|
-| `new BundlePersist({ root, fs })` | An instance bound to one storage directory. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below. |
+| Call                                              | Result                                                                                                                                                  |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new BundlePersist({ root, fs })`                 | An instance bound to one storage directory. `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` override the names below.                           |
 | `await bundles.save(bundle, version, { assets })` | Writes the update. Rejects on a version that isn't semver. Saves never run in parallel, and when several are waiting only the newest bundle is written. |
-| `await bundles.savedVersion()` | The stored version, or `null` when nothing complete is stored. |
+| `await bundles.savedVersion()`                    | The stored version, or `null` when nothing complete is stored.                                                                                          |
 
 ## On-disk layout
 

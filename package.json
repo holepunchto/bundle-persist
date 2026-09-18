@@ -27,7 +27,11 @@
     "lib"
   ],
   "scripts": {
-    "test": "brittle-bare test/index.js"
+    "format": "prettier --write .",
+    "test": "prettier --check . && lunte && npm run test:node && npm run test:bare",
+    "lint": "lunte",
+    "test:node": "brittle-node test/index.test.js",
+    "test:bare": "brittle-bare test/index.test.js"
   },
   "repository": {
     "type": "git",
@@ -51,6 +55,9 @@
   },
   "devDependencies": {
     "b4a": "^1.9.0",
-    "brittle": "^4.2.0"
+    "brittle": "^4.2.0",
+    "lunte": "^1.6.0",
+    "prettier": "^3.8.1",
+    "prettier-config-holepunch": "^2.0.0"
   }
 }
