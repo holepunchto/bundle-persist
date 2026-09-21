@@ -2,7 +2,7 @@
 
 const { Version } = require('bare-semver')
 const debounceify = require('debounceify')
-const fs = require('#fs')
+const fs = require('./lib/fs')
 
 module.exports = class BundlePersist {
   constructor(opts = {}) {

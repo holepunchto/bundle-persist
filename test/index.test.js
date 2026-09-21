@@ -2,10 +2,11 @@
 
 const test = require('brittle')
 const b4a = require('b4a')
-const fs = require('fs/promises')
-const path = require('path')
+const fs = require('bare-fs/promises')
+const path = require('bare-path')
 
 const BundlePersist = require('..')
+const io = require('../lib/fs')
 
 const BUNDLE = b4a.from([1, 2, 3])
 
@@ -15,7 +16,7 @@ async function tmp(t) {
   return root
 }
 
-async function read(root, ...segments) {
+function read(root, ...segments) {
   return fs.readFile(path.join(root, 'ota', ...segments))
 }
 
@@ -202,7 +203,6 @@ test('apply does nothing without a newly staged bundle', async (t) => {
 
 test('apply waits for an in-flight save', async (t) => {
   const root = await tmp(t)
-  const io = require('#fs')
   const writing = deferred()
   const release = deferred()
   const bundles = new BundlePersist({
@@ -232,7 +232,6 @@ test('apply waits for an in-flight save', async (t) => {
 
 test('apply waits for and commits the latest pending save', async (t) => {
   const root = await tmp(t)
-  const io = require('#fs')
   const writing = deferred()
   const release = deferred()
   const staged = []
@@ -269,7 +268,6 @@ test('apply waits for and commits the latest pending save', async (t) => {
 
 test('concurrent applies commit a staged bundle only once', async (t) => {
   const root = await tmp(t)
-  const io = require('#fs')
   const committing = deferred()
   const release = deferred()
   let commits = 0
@@ -299,7 +297,6 @@ test('concurrent applies commit a staged bundle only once', async (t) => {
 
 test('apply and a pending save both report staging failure and recover', async (t) => {
   const root = await tmp(t)
-  const io = require('#fs')
   const writing = deferred()
   const release = deferred()
   const bundles = new BundlePersist({
@@ -337,7 +334,6 @@ test('apply and a pending save both report staging failure and recover', async (
 
 test('a failed apply cannot swap the previous bundle back on retry', async (t) => {
   const root = await tmp(t)
-  const io = require('#fs')
   let fail = false
   const bundles = new BundlePersist({
     root,
@@ -412,17 +408,6 @@ test('savedVersion is null when the bundle is missing', async (t) => {
 })
 
 test('an interrupted save leaves the previous update in place', async (t) => {
-  await interruptedSave(t, require('../lib/fs.js'))
-})
-
-test('an interrupted atomic save leaves the previous update in place', async (t) => {
-  const bare = tryRequire('../lib/fs-bare.js')
-  if (bare === null) return t.pass('no atomic swap in this runtime')
-
-  await interruptedSave(t, bare)
-})
-
-async function interruptedSave(t, io) {
   const root = await tmp(t)
   const bundles = new BundlePersist({ root, fs: io })
 
@@ -443,15 +428,7 @@ async function interruptedSave(t, io) {
 
   t.is(await bundles.savedVersion(), '4.24.0', 'the stored update survived')
   t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
-}
-
-function tryRequire(id) {
-  try {
-    return require(id)
-  } catch {
-    return null
-  }
-}
+})
 
 function deferred() {
   let resolve
@@ -461,12 +438,8 @@ function deferred() {
   return { promise, resolve }
 }
 
-test('default root follows the runtime', async (t) => {
-  if (require('#fs') === require('../lib/fs.js')) {
-    t.exception(() => new BundlePersist(), /No storage root/)
-  } else {
-    t.is(new BundlePersist().root, require('bare-storage').persistent())
-  }
+test('default root uses Bare persistent storage', (t) => {
+  t.is(new BundlePersist().root, require('bare-storage').persistent())
 })
 
 async function exists(target) {
