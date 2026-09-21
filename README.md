@@ -1,51 +1,110 @@
 # bundle-persist
 
-Stage and atomically apply app bundles from Bare. Native app code chooses which bundle to boot; this module only persists the bundle, assets and version.
+Stage and atomically apply bundles and their assets from Bare. Bundle contents are opaque bytes; consumers choose how to load them and when to switch to an applied version.
 
 ```sh
 npm install bundle-persist
 ```
 
+For example, stage a Bare worker bundle:
+
 ```js
+const fs = require('bare-fs/promises')
 const BundlePersist = require('bundle-persist')
 
-const bundles = new BundlePersist({ currentVersion: '1.0.0' })
-const compatible = await bundles.save(bundle, '1.1.0', {
-  minver: '1.0.0',
-  assets: { 'assets/logo.png': logoBytes }
+const bundles = new BundlePersist({
+  currentVersion: '1.0.0',
+  bundleFile: 'worker.bundle'
 })
 
-if (compatible) {
-  // When the user is ready, stop incoming saves and apply before restarting.
-  await bundles.apply()
-}
+const compatible = await bundles.save(await fs.readFile('downloads/worker.bundle'), '1.1.0', {
+  minver: '1.0.0',
+  assets: { 'data/config.json': await fs.readFile('downloads/config.json') }
+})
 ```
 
-`bundle` and asset values are bytes. Asset keys are trusted paths relative to the bundle directory; preserve the paths generated with the bundle.
+At a safe point, stop incoming saves and any worker using the existing files, then apply:
+
+```js
+if (compatible) await bundles.apply()
+```
+
+The consumer can then load the applied worker from `bundles.dir`. Loading, restarting and choosing a fallback bundle are the consumer's responsibility.
 
 ## API
 
-- `new BundlePersist({ currentVersion, root })`: `currentVersion` is the installed native app's release version. `root` defaults to `bare-storage.persistent()`.
-- `save(bundle, version, { minver, assets })`: stages files and returns `true`, or returns `false` without writing if the native version is below `minver`. `minver` and `assets` are optional. Invalid versions and filesystem failures reject.
-- `isCompatible(minver)`: checks compatibility without writing. Supplying `minver` requires `currentVersion`; versions use SemVer precedence.
-- `apply()`: waits for pending staging, then commits. Returns `false` if no new update is ready. It does not restart the app.
-- `savedVersion()`: returns the applied version or `null`.
+- `new BundlePersist({ currentVersion, root })`: `currentVersion` is a SemVer compatibility baseline supplied by the consumer, such as the version of its host runtime. It is optional unless `minver` is used. `root` defaults to `bare-storage.persistent()`.
+- `save(bundle, version, { minver, assets })`: stages the bundle, assets and manifest and returns `true`. Returns `false` without writing when `currentVersion` is below `minver`. `minver` and `assets` are optional. Invalid versions and filesystem failures reject.
+- `isCompatible(minver)`: checks compatibility without writing. Versions use SemVer precedence; omitting `minver` returns `true`.
+- `apply()`: waits for pending staging, then commits. Returns `true` when committed or `false` when no new bundle is ready. It does not load the bundle or restart anything.
+- `savedVersion()`: returns the applied version, or `null` when the bundle or a valid manifest is unavailable.
 
-Set `minver` to the release version containing the native changes required by an update. An OTA JavaScript version does not change that baseline.
+`bundle` and asset values are bytes. Asset keys are trusted paths relative to the bundle directory; preserve the paths expected by the bundle. `minver` describes the compatibility baseline required by a bundle. Saving or applying a bundle does not change `currentVersion`.
 
 ## Storage
 
+With the default constructor options:
+
 ```text
-<root>/ota/
+<root>/bundle_persist/
   app.bundle
   manifest.json    { "version": "1.1.0", "minver": "1.0.0" }
   assets/...
 ```
 
-`save()` writes to `ota.tmp`, leaving the running bundle and assets untouched. `apply()` exchanges it with `ota` using `fs-native-extensions.swap()`; the first apply uses a rename. File writes and the surrounding directories are synced. All filesystem operations live in `lib/fs.js`.
+`save()` writes to `bundle_persist.tmp`, leaving the applied bundle and assets untouched. `apply()` exchanges it with `bundle_persist` using `fs-native-extensions.swap()`; the first apply uses a rename. File writes and the staging and parent directories are synced.
 
-Use one writer per root. Overlapping saves coalesce to the latest compatible update. Stop new saves before applying, then restart immediately because running code can still reference assets on disk. After a failed apply, save again before retrying. Unapplied state is kept in memory and must be supplied again after a process restart.
+The constructor accepts these overrides:
 
-The native picker must read `ota/app.bundle` and `ota/manifest.json` under Application Support on iOS or `context.filesDir` on Android. It should select only an update newer than the shipped version and fall back to the shipped bundle when unavailable. No integrity checking or crash rollback is provided.
+| Option         | Default                     |
+| -------------- | --------------------------- |
+| `root`         | `bare-storage.persistent()` |
+| `payloadDir`   | `bundle_persist`            |
+| `stagingDir`   | `bundle_persist.tmp`        |
+| `bundleFile`   | `app.bundle`                |
+| `manifestFile` | `manifest.json`             |
 
-The constructor also accepts `otaDir`, `stagingDir`, `bundleFile` and `manifestFile` overrides, plus an `fs` adapter for tests. Keep overridden names aligned with native boot code.
+It also accepts an `fs` adapter matching `lib/fs.js`. Keep storage names aligned with the consumer that loads the files. Use one writer per root and separate roots for independent bundles.
+
+Overlapping saves coalesce to the latest compatible save. Stop new saves before applying and coordinate active consumers so they do not read assets while their directory is replaced. After a failed apply, save again before retrying. Staged files are not automatically recovered after a process restart; save again before applying. Integrity checks and crash rollback are left to the consumer.
+
+## Metro bundles
+
+A React Native app can persist a Metro bundle and its assets with this module, using the installed native version as `currentVersion` and the native version required by the update as `minver`. Preserve Metro's relative asset paths and align the native bundle picker with the storage options. Apply at a safe point and reload React Native to use the new files.
+
+For example, read a downloaded platform folder from Bare using `localdrive` and `which-runtime`. Each folder contains `app.bundle`, `package.json` with `version` and `minver`, and the assets emitted by Metro:
+
+```js
+const Localdrive = require('localdrive')
+const { isIOS } = require('which-runtime')
+const BundlePersist = require('bundle-persist')
+
+const bundles = new BundlePersist({ currentVersion: '1.0.0' })
+const drive = new Localdrive(isIOS ? 'downloads/ios' : 'downloads/android')
+await drive.ready()
+const { version, minver } = JSON.parse(await drive.get('/package.json'))
+const assets = Object.create(null)
+
+for await (const { key, value } of drive.list('/')) {
+  if (!value.blob || key === '/app.bundle' || key === '/package.json') continue
+  assets[key.slice(1)] = await drive.get(key)
+}
+
+const compatible = await bundles.save(await drive.get('/app.bundle'), version, {
+  minver,
+  assets
+})
+await drive.close()
+```
+
+The installed native version above is `1.0.0`. If `compatible` is `false`, tell the frontend that a native app update is required. Otherwise, the bundle and assets are staged while React Native continues running.
+
+When the user chooses Apply, run this in Bare:
+
+```js
+if (compatible) await bundles.apply()
+```
+
+When `apply()` returns `true`, notify React Native over IPC and reload it immediately. The native picker should read `bundle_persist/app.bundle` and `bundle_persist/manifest.json` from the same persistent root. Keep the downloaded source folder separate from `bundle_persist` and `bundle_persist.tmp`.
+
+See [bundle-persist-showcase](https://github.com/holepunchto/bundle-persist-showcase) for an Expo example and its Android and iOS native patch.

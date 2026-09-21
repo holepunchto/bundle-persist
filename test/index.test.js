@@ -17,7 +17,7 @@ async function tmp(t) {
 }
 
 function read(root, ...segments) {
-  return fs.readFile(path.join(root, 'ota', ...segments))
+  return fs.readFile(path.join(root, 'bundle_persist', ...segments))
 }
 
 test('save stages the bundle, manifest and assets until apply', async (t) => {
@@ -30,11 +30,14 @@ test('save stages the bundle, manifest and assets until apply', async (t) => {
   )
 
   t.is(await bundles.savedVersion(), null)
-  t.absent(await exists(path.join(root, 'ota')))
-  t.ok(b4a.equals(await fs.readFile(path.join(root, 'ota.tmp', 'app.bundle')), BUNDLE))
-  t.alike(JSON.parse(await fs.readFile(path.join(root, 'ota.tmp', 'manifest.json'), 'utf8')), {
-    version: '4.24.0'
-  })
+  t.absent(await exists(path.join(root, 'bundle_persist')))
+  t.ok(b4a.equals(await fs.readFile(path.join(root, 'bundle_persist.tmp', 'app.bundle')), BUNDLE))
+  t.alike(
+    JSON.parse(await fs.readFile(path.join(root, 'bundle_persist.tmp', 'manifest.json'), 'utf8')),
+    {
+      version: '4.24.0'
+    }
+  )
   t.is(await bundles.apply(), true)
 
   t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
@@ -70,10 +73,15 @@ test('save checks minver using semver precedence and persists it when compatible
     t.alike(await fs.readdir(root), [], 'compatibility check writes no files')
     t.is(await bundles.save(BUNDLE, '4.26.0', { minver }), compatible)
     if (compatible) {
-      t.alike(JSON.parse(await fs.readFile(path.join(root, 'ota.tmp', 'manifest.json'), 'utf8')), {
-        version: '4.26.0',
-        minver
-      })
+      t.alike(
+        JSON.parse(
+          await fs.readFile(path.join(root, 'bundle_persist.tmp', 'manifest.json'), 'utf8')
+        ),
+        {
+          version: '4.26.0',
+          minver
+        }
+      )
     } else {
       t.alike(await fs.readdir(root), [], 'incompatible update writes no files')
     }
@@ -126,7 +134,12 @@ test('an incompatible update preserves the active and staged bundles', async (t)
   t.is(await bundles.savedVersion(), '4.24.0')
   t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
   t.ok(b4a.equals(await read(root, 'assets/old.png'), b4a.from([1])))
-  t.ok(b4a.equals(await fs.readFile(path.join(root, 'ota.tmp', 'app.bundle')), b4a.from([4])))
+  t.ok(
+    b4a.equals(
+      await fs.readFile(path.join(root, 'bundle_persist.tmp', 'app.bundle')),
+      b4a.from([4])
+    )
+  )
 
   t.is(await bundles.apply(), true)
   t.is(await bundles.savedVersion(), '4.25.0')
@@ -153,7 +166,7 @@ test('save preserves the running bundle and assets until apply', async (t) => {
 
   t.is(await bundles.savedVersion(), '4.25.0')
   t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([4])))
-  t.absent(await exists(path.join(root, 'ota', 'assets')))
+  t.absent(await exists(path.join(root, 'bundle_persist', 'assets')))
 })
 
 test('save rejects a version that is not semver and keeps what is stored', async (t) => {
@@ -187,7 +200,7 @@ test('overlapping saves return compatibility and write only the newest compatibl
 
   t.is(await bundles.savedVersion(), '4.26.0')
   t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([3])))
-  t.absent(await exists(path.join(root, 'ota.tmp')), 'staging directory is gone')
+  t.absent(await exists(path.join(root, 'bundle_persist.tmp')), 'staging directory is gone')
 })
 
 test('apply does nothing without a newly staged bundle', async (t) => {
@@ -378,7 +391,7 @@ test('savedVersion is null when the manifest is missing', async (t) => {
 
   await bundles.save(BUNDLE, '4.24.0')
   await bundles.apply()
-  await fs.rm(path.join(root, 'ota', 'manifest.json'))
+  await fs.rm(path.join(root, 'bundle_persist', 'manifest.json'))
 
   t.is(await bundles.savedVersion(), null)
 })
@@ -391,7 +404,7 @@ test('savedVersion is null when the manifest is unusable', async (t) => {
   await bundles.apply()
 
   for (const manifest of ['{not json', '{}', JSON.stringify({ version: 'latest' })]) {
-    await fs.writeFile(path.join(root, 'ota', 'manifest.json'), manifest)
+    await fs.writeFile(path.join(root, 'bundle_persist', 'manifest.json'), manifest)
     t.is(await bundles.savedVersion(), null, manifest)
   }
 })
@@ -402,7 +415,7 @@ test('savedVersion is null when the bundle is missing', async (t) => {
 
   await bundles.save(BUNDLE, '4.24.0')
   await bundles.apply()
-  await fs.rm(path.join(root, 'ota', 'app.bundle'))
+  await fs.rm(path.join(root, 'bundle_persist', 'app.bundle'))
 
   t.is(await bundles.savedVersion(), null)
 })
