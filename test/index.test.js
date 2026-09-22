@@ -10,18 +10,12 @@ const io = require('../lib/fs')
 
 const BUNDLE = b4a.from([1, 2, 3])
 
-async function tmp(t) {
-  const root = await fs.mkdtemp(path.join(__dirname, 'tmp-'))
-  t.teardown(() => fs.rm(root, { recursive: true, force: true }))
-  return root
-}
-
 function read(root, ...segments) {
   return fs.readFile(path.join(root, 'bundle_persist', ...segments))
 }
 
 test('save stages the bundle, manifest and assets until apply', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   t.is(
@@ -46,8 +40,29 @@ test('save stages the bundle, manifest and assets until apply', async (t) => {
   t.is(await bundles.savedVersion(), '4.24.0')
 })
 
+test('a file sync failure rejects save and closes the file', async (t) => {
+  const bundles = new BundlePersist({ root: await t.tmp() })
+  const open = fs.open
+  let handle
+
+  fs.open = async (...args) => {
+    handle = await open(...args)
+    handle.sync = () =>
+      Promise.reject(Object.assign(new Error('file sync failed'), { code: 'EPERM' }))
+    return handle
+  }
+
+  try {
+    await t.exception(bundles.save(BUNDLE, '4.24.0'), /file sync failed/)
+    t.is(handle.fd, -1, 'file handle is closed')
+    t.is(await bundles.apply(), false)
+  } finally {
+    fs.open = open
+  }
+})
+
 test('save accepts a prerelease version', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0-nightly.3')
@@ -66,7 +81,7 @@ test('save checks minver using semver precedence and persists it when compatible
     ['4.24.0-nightly.3', '4.24.0', false],
     ['4.24.0+native', '4.24.0+other', true]
   ]) {
-    const root = await tmp(t)
+    const root = await t.tmp()
     const bundles = new BundlePersist({ root, currentVersion })
 
     t.is(bundles.isCompatible(minver), compatible)
@@ -90,7 +105,7 @@ test('save checks minver using semver precedence and persists it when compatible
 })
 
 test('currentVersion and minver must be valid semver when supplied', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
 
   t.is(bundles.isCompatible(), true)
@@ -120,7 +135,7 @@ test('currentVersion and minver must be valid semver when supplied', async (t) =
 })
 
 test('an incompatible update preserves the active and staged bundles', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
 
   await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([1]) } })
@@ -151,7 +166,7 @@ test('an incompatible update preserves the active and staged bundles', async (t)
 })
 
 test('save preserves the running bundle and assets until apply', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([1]) } })
@@ -170,7 +185,7 @@ test('save preserves the running bundle and assets until apply', async (t) => {
 })
 
 test('save rejects a version that is not semver and keeps what is stored', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -185,7 +200,7 @@ test('save rejects a version that is not semver and keeps what is stored', async
 })
 
 test('overlapping saves return compatibility and write only the newest compatible bundle', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
 
   const results = await Promise.all([
@@ -204,7 +219,7 @@ test('overlapping saves return compatibility and write only the newest compatibl
 })
 
 test('apply does nothing without a newly staged bundle', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   t.is(await bundles.apply(), false)
@@ -215,7 +230,7 @@ test('apply does nothing without a newly staged bundle', async (t) => {
 })
 
 test('apply waits for an in-flight save', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const writing = deferred()
   const release = deferred()
   const bundles = new BundlePersist({
@@ -244,7 +259,7 @@ test('apply waits for an in-flight save', async (t) => {
 })
 
 test('apply waits for and commits the latest pending save', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const writing = deferred()
   const release = deferred()
   const staged = []
@@ -280,7 +295,7 @@ test('apply waits for and commits the latest pending save', async (t) => {
 })
 
 test('concurrent applies commit a staged bundle only once', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const committing = deferred()
   const release = deferred()
   let commits = 0
@@ -309,7 +324,7 @@ test('concurrent applies commit a staged bundle only once', async (t) => {
 })
 
 test('apply and a pending save both report staging failure and recover', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const writing = deferred()
   const release = deferred()
   const bundles = new BundlePersist({
@@ -346,7 +361,7 @@ test('apply and a pending save both report staging failure and recover', async (
 })
 
 test('a failed apply cannot swap the previous bundle back on retry', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   let fail = false
   const bundles = new BundlePersist({
     root,
@@ -379,14 +394,14 @@ test('a failed apply cannot swap the previous bundle back on retry', async (t) =
 })
 
 test('savedVersion is null when nothing is stored', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   t.is(await bundles.savedVersion(), null)
 })
 
 test('savedVersion is null when the manifest is missing', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -397,7 +412,7 @@ test('savedVersion is null when the manifest is missing', async (t) => {
 })
 
 test('savedVersion is null when the manifest is unusable', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -410,7 +425,7 @@ test('savedVersion is null when the manifest is unusable', async (t) => {
 })
 
 test('savedVersion is null when the bundle is missing', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -421,7 +436,7 @@ test('savedVersion is null when the bundle is missing', async (t) => {
 })
 
 test('an interrupted save leaves the previous update in place', async (t) => {
-  const root = await tmp(t)
+  const root = await t.tmp()
   const bundles = new BundlePersist({ root, fs: io })
 
   await bundles.save(BUNDLE, '4.24.0')

@@ -1,7 +1,7 @@
 {
   "name": "bundle-persist",
   "version": "0.0.1",
-  "description": "Stages and atomically applies bundles and assets from Bare",
+  "description": "Stages and applies bundles and assets from Bare",
   "main": "index.js",
   "exports": {
     ".": "./index.js",

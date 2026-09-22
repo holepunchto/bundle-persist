@@ -1,6 +1,6 @@
 # bundle-persist
 
-Stage and atomically apply bundles and their assets from Bare. Bundle contents are opaque bytes; consumers choose how to load them and when to switch to an applied version.
+Stage and apply bundles and their assets from Bare. Bundle contents are opaque bytes; consumers choose how to load them and when to switch to an applied version.
 
 ```sh
 npm install bundle-persist
@@ -52,7 +52,9 @@ With the default constructor options:
   assets/...
 ```
 
-`save()` writes to `bundle_persist.tmp`, leaving the applied bundle and assets untouched. `apply()` exchanges it with `bundle_persist` using `fs-native-extensions.swap()`; the first apply uses a rename. File writes and the staging and parent directories are synced.
+`save()` writes to `bundle_persist.tmp`, leaving the applied bundle and assets untouched. `apply()` exchanges it with `bundle_persist` using `fs-native-extensions.swap()`; the first apply uses a rename. File writes are synced on all platforms. The staging and parent directories are also synced except on Windows, where directory flushing is unsupported.
+
+The exchange is atomic on macOS, iOS, Linux and Android. On Windows, [`fs-native-extensions.swap()`](https://github.com/holepunchto/fs-native-extensions#await-swapfrom-to) uses multiple moves and is not atomic.
 
 The constructor accepts these overrides:
 
@@ -108,3 +110,7 @@ if (compatible) await bundles.apply()
 When `apply()` returns `true`, notify React Native over IPC and reload it immediately. The native picker should read `bundle_persist/app.bundle` and `bundle_persist/manifest.json` from the same persistent root. Keep the downloaded source folder separate from `bundle_persist` and `bundle_persist.tmp`.
 
 See [bundle-persist-showcase](https://github.com/holepunchto/bundle-persist-showcase) for an Expo example and its Android and iOS native patch.
+
+## Tests
+
+Run `npm test` with Bare installed. CI runs the same suite on Linux, macOS, Windows, an iOS simulator and an Android emulator. Mobile jobs bundle the tests with `bare-pack` and execute them in the native Bare runtime supplied by `bare-run`.
