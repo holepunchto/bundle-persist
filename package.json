@@ -1,6 +1,6 @@
 {
   "name": "bundle-persist",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Stages and applies bundles and assets from Bare",
   "main": "index.js",
   "exports": {
