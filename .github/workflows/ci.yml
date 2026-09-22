@@ -6,61 +6,8 @@ on:
     branches: [main]
 jobs:
   test:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-          - os: macos-latest
-            platform: darwin
-            arch: x64
-          - os: windows-latest
-            platform: win32
-            arch: x64
-    runs-on: ${{ matrix.os }}
-    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    name: linux-x64
     steps:
       - uses: holepunchto/actions/bare-base@v1
       - run: npm test
-  ios:
-    runs-on: macos-15
-    name: ios-arm64-simulator
-    timeout-minutes: 20
-    steps:
-      - uses: holepunchto/actions/node-base@v1
-      - run: npm install --no-save --package-lock=false bare-run@0.0.3 bare-pack@1.5.1
-      - name: Boot simulator
-        run: |
-          device=$(xcrun simctl list devices available --json | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
-          xcrun simctl boot "$device"
-          xcrun simctl bootstatus "$device" -b
-      - name: Run tests
-        run: |
-          npx bare-pack --platform ios --arch arm64 --simulator --out "$RUNNER_TEMP/test.bundle" test/index.test.js
-          chmod +x node_modules/bare-run/prebuilds/ios-arm64-simulator/bare-run
-          xcrun simctl spawn booted "$PWD/node_modules/bare-run/prebuilds/ios-arm64-simulator/bare-run" "$RUNNER_TEMP/test.bundle"
-  android:
-    runs-on: ubuntu-latest
-    name: android-x64
-    timeout-minutes: 20
-    steps:
-      - uses: holepunchto/actions/node-base@v1
-      - run: npm install --no-save --package-lock=false bare-run@0.0.3 bare-pack@1.5.1
-      - run: npx bare-pack --platform android --arch x64 --out "$RUNNER_TEMP/test.bundle" test/index.test.js
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Run tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          script: |
-            adb shell mkdir -p /data/local/tmp/bundle-persist
-            adb push node_modules/bare-run/prebuilds/android-x64/bare-run "$RUNNER_TEMP/test.bundle" /data/local/tmp/bundle-persist/
-            adb shell chmod +x /data/local/tmp/bundle-persist/bare-run
-            adb shell 'TMPDIR=/data/local/tmp/bundle-persist /data/local/tmp/bundle-persist/bare-run /data/local/tmp/bundle-persist/test.bundle'

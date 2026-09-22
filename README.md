@@ -113,4 +113,4 @@ See [bundle-persist-showcase](https://github.com/holepunchto/bundle-persist-show
 
 ## Tests
 
-Run `npm test` with Bare installed. CI runs the same suite on Linux, macOS, Windows, an iOS simulator and an Android emulator. Mobile jobs bundle the tests with `bare-pack` and execute them in the native Bare runtime supplied by `bare-run`.
+Run `npm test` with Bare installed. CI runs formatting, lint and the Bare test suite on Linux x64.
