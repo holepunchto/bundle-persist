@@ -233,18 +233,13 @@ test('apply waits for an in-flight save', async (t) => {
   const root = await t.tmp()
   const writing = deferred()
   const release = deferred()
-  const bundles = new BundlePersist({
-    root,
-    fs: {
-      ...io,
-      async writeFile(target, data) {
-        if (target.endsWith('app.bundle')) {
-          writing.resolve()
-          await release.promise
-        }
-        return io.writeFile(target, data)
-      }
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle')) {
+      writing.resolve()
+      await release.promise
     }
+    return writeFile(target, data)
   })
 
   const saving = bundles.save(BUNDLE, '4.24.0')
@@ -263,21 +258,16 @@ test('apply waits for and commits the latest pending save', async (t) => {
   const writing = deferred()
   const release = deferred()
   const staged = []
-  const bundles = new BundlePersist({
-    root,
-    fs: {
-      ...io,
-      async writeFile(target, data) {
-        if (target.endsWith('app.bundle')) {
-          staged.push(data[0])
-          if (data[0] === 1) {
-            writing.resolve()
-            await release.promise
-          }
-        }
-        return io.writeFile(target, data)
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle')) {
+      staged.push(data[0])
+      if (data[0] === 1) {
+        writing.resolve()
+        await release.promise
       }
     }
+    return writeFile(target, data)
   })
 
   const first = bundles.save(b4a.from([1]), '4.24.0')
@@ -299,17 +289,12 @@ test('concurrent applies commit a staged bundle only once', async (t) => {
   const committing = deferred()
   const release = deferred()
   let commits = 0
-  const bundles = new BundlePersist({
-    root,
-    fs: {
-      ...io,
-      async commitDir(from, to) {
-        commits++
-        committing.resolve()
-        await release.promise
-        return io.commitDir(from, to)
-      }
-    }
+  const bundles = new BundlePersist({ root })
+  const commitDir = stub(t, 'commitDir', async (from, to) => {
+    commits++
+    committing.resolve()
+    await release.promise
+    return commitDir(from, to)
   })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -327,19 +312,14 @@ test('apply and a pending save both report staging failure and recover', async (
   const root = await t.tmp()
   const writing = deferred()
   const release = deferred()
-  const bundles = new BundlePersist({
-    root,
-    fs: {
-      ...io,
-      async writeFile(target, data) {
-        if (target.endsWith('app.bundle') && data[0] === 4) {
-          writing.resolve()
-          await release.promise
-        }
-        if (target.endsWith('app.bundle') && data[0] === 5) throw new Error('write failed')
-        return io.writeFile(target, data)
-      }
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle') && data[0] === 4) {
+      writing.resolve()
+      await release.promise
     }
+    if (target.endsWith('app.bundle') && data[0] === 5) throw new Error('write failed')
+    return writeFile(target, data)
   })
 
   await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([9]) } })
@@ -363,19 +343,14 @@ test('apply and a pending save both report staging failure and recover', async (
 test('a failed apply cannot swap the previous bundle back on retry', async (t) => {
   const root = await t.tmp()
   let fail = false
-  const bundles = new BundlePersist({
-    root,
-    fs: {
-      ...io,
-      async commitDir(from, to) {
-        if (!fail) return io.commitDir(from, to)
-        const previous = path.join(root, 'previous')
-        await fs.rename(to, previous)
-        await fs.rename(from, to)
-        await fs.rename(previous, from)
-        throw new Error('swap cleanup failed')
-      }
-    }
+  const bundles = new BundlePersist({ root })
+  const commitDir = stub(t, 'commitDir', async (from, to) => {
+    if (!fail) return commitDir(from, to)
+    const previous = path.join(root, 'previous')
+    await fs.rename(to, previous)
+    await fs.rename(from, to)
+    await fs.rename(previous, from)
+    throw new Error('swap cleanup failed')
   })
 
   await bundles.save(BUNDLE, '4.24.0')
@@ -437,20 +412,17 @@ test('savedVersion is null when the bundle is missing', async (t) => {
 
 test('an interrupted save leaves the previous update in place', async (t) => {
   const root = await t.tmp()
-  const bundles = new BundlePersist({ root, fs: io })
+  const bundles = new BundlePersist({ root })
 
   await bundles.save(BUNDLE, '4.24.0')
   await bundles.apply()
 
-  const failing = {
-    ...io,
-    writeFile(target, data) {
-      if (target.endsWith('manifest.json')) throw new Error('interrupted')
-      return io.writeFile(target, data)
-    }
-  }
+  const writeFile = stub(t, 'writeFile', (target, data) => {
+    if (target.endsWith('manifest.json')) throw new Error('interrupted')
+    return writeFile(target, data)
+  })
 
-  const interrupted = new BundlePersist({ root, fs: failing })
+  const interrupted = new BundlePersist({ root })
   await t.exception(interrupted.save(b4a.from([4]), '4.25.0'), /interrupted/)
   t.is(await interrupted.apply(), false)
 
@@ -477,4 +449,13 @@ async function exists(target) {
   } catch {
     return false
   }
+}
+
+function stub(t, method, replacement) {
+  const original = io[method]
+  io[method] = replacement
+  t.teardown(() => {
+    io[method] = original
+  })
+  return original
 }

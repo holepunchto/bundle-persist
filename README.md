@@ -66,7 +66,7 @@ The constructor accepts these overrides:
 | `bundleFile`   | `app.bundle`                |
 | `manifestFile` | `manifest.json`             |
 
-It also accepts an `fs` adapter matching `lib/fs.js`. Keep storage names aligned with the consumer that loads the files. Use one writer per root and separate roots for independent bundles.
+Keep storage names aligned with the consumer that loads the files. Use one writer per root and separate roots for independent bundles.
 
 Overlapping saves coalesce to the latest compatible save. Stop new saves before applying and coordinate active consumers so they do not read assets while their directory is replaced. After a failed apply, save again before retrying. Staged files are not automatically recovered after a process restart; save again before applying. Integrity checks and crash rollback are left to the consumer.
 

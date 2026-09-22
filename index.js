@@ -11,13 +11,12 @@ module.exports = class BundlePersist {
     }
 
     this.currentVersion = opts.currentVersion
-    this.fs = opts.fs || fs
-    this.root = opts.root || this.fs.root()
+    this.root = opts.root || fs.root()
     this.payloadDir = opts.payloadDir || 'bundle_persist'
     this.stagingDir = opts.stagingDir || 'bundle_persist.tmp'
     this.bundleFile = opts.bundleFile || 'app.bundle'
     this.manifestFile = opts.manifestFile || 'manifest.json'
-    this.dir = this.fs.join(this.root, this.payloadDir)
+    this.dir = fs.join(this.root, this.payloadDir)
     this._pending = null
     this._ready = false
     this._write = debounceify(this._write.bind(this))
@@ -50,13 +49,11 @@ module.exports = class BundlePersist {
     if (!this._ready) return false
 
     this._ready = false
-    await this.fs.commitDir(this.fs.join(this.root, this.stagingDir), this.dir)
+    await fs.commitDir(fs.join(this.root, this.stagingDir), this.dir)
     return true
   }
 
   async savedVersion() {
-    const fs = this.fs
-
     if (!(await fs.fileExists(fs.join(this.dir, this.bundleFile)))) return null
 
     const manifest = fs.join(this.dir, this.manifestFile)
@@ -78,7 +75,6 @@ module.exports = class BundlePersist {
     this._ready = false
 
     const { bundle, version, minver, assets } = pending
-    const fs = this.fs
     const staging = fs.join(this.root, this.stagingDir)
 
     if (await fs.dirExists(staging)) await fs.removeDir(staging)
