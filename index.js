@@ -18,7 +18,7 @@ module.exports = class BundlePersist {
     this.manifestFile = opts.manifestFile || 'manifest.json'
     this.dir = fs.join(this.root, this.payloadDir)
     this._pending = null
-    this._ready = false
+    this._readyToApply = false
     this._write = debounceify(this._write.bind(this))
   }
 
@@ -46,9 +46,9 @@ module.exports = class BundlePersist {
 
   async apply() {
     await this._write()
-    if (!this._ready) return false
+    if (!this._readyToApply) return false
 
-    this._ready = false
+    this._readyToApply = false
     await fs.commitDir(fs.join(this.root, this.stagingDir), this.dir)
     return true
   }
@@ -72,7 +72,7 @@ module.exports = class BundlePersist {
     if (pending === null) return
 
     this._pending = null
-    this._ready = false
+    this._readyToApply = false
 
     const { bundle, version, minver, assets } = pending
     const staging = fs.join(this.root, this.stagingDir)
@@ -93,7 +93,7 @@ module.exports = class BundlePersist {
     }
 
     await fs.writeFile(fs.join(staging, this.manifestFile), JSON.stringify({ version, minver }))
-    this._ready = true
+    this._readyToApply = true
   }
 }
 
