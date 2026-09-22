@@ -1,0 +1,18 @@
+name: Integrate
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: linux-x64
+    steps:
+      - uses: holepunchto/actions/bare-base@v1
+      - run: npm test
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: holepunchto/actions/bare-base@v1
+      - run: npm test

@@ -1,0 +1,461 @@
+'use strict'
+
+const test = require('brittle')
+const b4a = require('b4a')
+const fs = require('bare-fs/promises')
+const path = require('bare-path')
+
+const BundlePersist = require('..')
+const io = require('../lib/fs')
+
+const BUNDLE = b4a.from([1, 2, 3])
+
+function read(root, ...segments) {
+  return fs.readFile(path.join(root, 'bundle_persist', ...segments))
+}
+
+test('save stages the bundle, manifest and assets until apply', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  t.is(
+    await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/src/logo.png': b4a.from([9]) } }),
+    true
+  )
+
+  t.is(await bundles.savedVersion(), null)
+  t.absent(await exists(path.join(root, 'bundle_persist')))
+  t.ok(b4a.equals(await fs.readFile(path.join(root, 'bundle_persist.tmp', 'app.bundle')), BUNDLE))
+  t.alike(
+    JSON.parse(await fs.readFile(path.join(root, 'bundle_persist.tmp', 'manifest.json'), 'utf8')),
+    {
+      version: '4.24.0'
+    }
+  )
+  t.is(await bundles.apply(), true)
+
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+  t.alike(JSON.parse(b4a.toString(await read(root, 'manifest.json'))), { version: '4.24.0' })
+  t.ok(b4a.equals(await read(root, 'assets/src/logo.png'), b4a.from([9])))
+  t.is(await bundles.savedVersion(), '4.24.0')
+})
+
+test('a file sync failure rejects save and closes the file', async (t) => {
+  const bundles = new BundlePersist({ root: await t.tmp() })
+  const open = fs.open
+  let handle
+
+  fs.open = async (...args) => {
+    handle = await open(...args)
+    handle.sync = () =>
+      Promise.reject(Object.assign(new Error('file sync failed'), { code: 'EPERM' }))
+    return handle
+  }
+
+  try {
+    await t.exception(bundles.save(BUNDLE, '4.24.0'), /file sync failed/)
+    t.is(handle.fd, -1, 'file handle is closed')
+    t.is(await bundles.apply(), false)
+  } finally {
+    fs.open = open
+  }
+})
+
+test('save accepts a prerelease version', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0-nightly.3')
+  await bundles.apply()
+
+  t.is(await bundles.savedVersion(), '4.24.0-nightly.3')
+})
+
+test('save checks minver using semver precedence and persists it when compatible', async (t) => {
+  for (const [currentVersion, minver, compatible] of [
+    ['4.24.0', '4.23.0', true],
+    ['4.24.0', '4.24.0', true],
+    ['4.24.0', '4.25.0', false],
+    ['4.24.0-nightly.2', '4.24.0-nightly.3', false],
+    ['4.24.0-nightly.3', '4.24.0-nightly.2', true],
+    ['4.24.0-nightly.3', '4.24.0', false],
+    ['4.24.0+native', '4.24.0+other', true]
+  ]) {
+    const root = await t.tmp()
+    const bundles = new BundlePersist({ root, currentVersion })
+
+    t.is(bundles.isCompatible(minver), compatible)
+    t.alike(await fs.readdir(root), [], 'compatibility check writes no files')
+    t.is(await bundles.save(BUNDLE, '4.26.0', { minver }), compatible)
+    if (compatible) {
+      t.alike(
+        JSON.parse(
+          await fs.readFile(path.join(root, 'bundle_persist.tmp', 'manifest.json'), 'utf8')
+        ),
+        {
+          version: '4.26.0',
+          minver
+        }
+      )
+    } else {
+      t.alike(await fs.readdir(root), [], 'incompatible update writes no files')
+    }
+    t.is(await bundles.apply(), compatible)
+  }
+})
+
+test('currentVersion and minver must be valid semver when supplied', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
+
+  t.is(bundles.isCompatible(), true)
+  t.is(new BundlePersist({ root }).isCompatible(), true)
+
+  for (const version of ['latest', '4.24', '', null, 4]) {
+    t.exception(
+      () => new BundlePersist({ root, currentVersion: version }),
+      /Invalid current version/
+    )
+    t.exception(() => bundles.isCompatible(version), /Invalid minimum version/)
+    await t.exception(
+      bundles.save(BUNDLE, '4.25.0', { minver: version }),
+      /Invalid minimum version/
+    )
+  }
+
+  t.exception(
+    () => new BundlePersist({ root }).isCompatible('4.24.0'),
+    /currentVersion is required/
+  )
+  await t.exception(
+    new BundlePersist({ root }).save(BUNDLE, '4.25.0', { minver: '4.24.0' }),
+    /currentVersion is required/
+  )
+  t.alike(await fs.readdir(root), [])
+})
+
+test('an incompatible update preserves the active and staged bundles', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
+
+  await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([1]) } })
+  await bundles.apply()
+  await bundles.save(b4a.from([4]), '4.25.0', {
+    minver: '4.24.0',
+    assets: { 'assets/new.png': b4a.from([2]) }
+  })
+
+  t.is(await bundles.save(b4a.from([5]), '4.26.0', { minver: '4.25.0' }), false)
+  t.is(await bundles.savedVersion(), '4.24.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+  t.ok(b4a.equals(await read(root, 'assets/old.png'), b4a.from([1])))
+  t.ok(
+    b4a.equals(
+      await fs.readFile(path.join(root, 'bundle_persist.tmp', 'app.bundle')),
+      b4a.from([4])
+    )
+  )
+
+  t.is(await bundles.apply(), true)
+  t.is(await bundles.savedVersion(), '4.25.0')
+  t.ok(b4a.equals(await read(root, 'assets/new.png'), b4a.from([2])))
+  t.alike(JSON.parse(b4a.toString(await read(root, 'manifest.json'))), {
+    version: '4.25.0',
+    minver: '4.24.0'
+  })
+})
+
+test('save preserves the running bundle and assets until apply', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([1]) } })
+  await bundles.apply()
+  await bundles.save(b4a.from([4]), '4.25.0')
+
+  t.is(await bundles.savedVersion(), '4.24.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+  t.ok(b4a.equals(await read(root, 'assets/old.png'), b4a.from([1])))
+
+  await bundles.apply()
+
+  t.is(await bundles.savedVersion(), '4.25.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([4])))
+  t.absent(await exists(path.join(root, 'bundle_persist', 'assets')))
+})
+
+test('save rejects a version that is not semver and keeps what is stored', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+
+  for (const version of ['latest', '4.24', '4.24.0.1', '', null]) {
+    await t.exception(bundles.save(b4a.from([7]), version), /Invalid bundle version/)
+  }
+
+  t.is(await bundles.savedVersion(), '4.24.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+})
+
+test('overlapping saves return compatibility and write only the newest compatible bundle', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root, currentVersion: '4.24.0' })
+
+  const results = await Promise.all([
+    bundles.save(b4a.from([1]), '4.24.0'),
+    bundles.save(b4a.from([8]), '4.25.0', { minver: '4.25.0' }),
+    bundles.save(b4a.from([2]), '4.25.0', { minver: '4.23.0' }),
+    bundles.save(b4a.from([3]), '4.26.0', { minver: '4.24.0' }),
+    bundles.save(b4a.from([9]), '4.27.0', { minver: '4.25.0' })
+  ])
+  t.alike(results, [true, false, true, true, false])
+  await bundles.apply()
+
+  t.is(await bundles.savedVersion(), '4.26.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([3])))
+  t.absent(await exists(path.join(root, 'bundle_persist.tmp')), 'staging directory is gone')
+})
+
+test('apply does nothing without a newly staged bundle', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  t.is(await bundles.apply(), false)
+  await bundles.save(BUNDLE, '4.24.0')
+  t.is(await bundles.apply(), true)
+  t.is(await bundles.apply(), false)
+  t.is(await bundles.savedVersion(), '4.24.0')
+})
+
+test('apply waits for an in-flight save', async (t) => {
+  const root = await t.tmp()
+  const writing = deferred()
+  const release = deferred()
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle')) {
+      writing.resolve()
+      await release.promise
+    }
+    return writeFile(target, data)
+  })
+
+  const saving = bundles.save(BUNDLE, '4.24.0')
+  await writing.promise
+  const applying = bundles.apply()
+  t.is(await bundles.savedVersion(), null)
+  release.resolve()
+
+  await saving
+  t.is(await applying, true)
+  t.is(await bundles.savedVersion(), '4.24.0')
+})
+
+test('apply waits for and commits the latest pending save', async (t) => {
+  const root = await t.tmp()
+  const writing = deferred()
+  const release = deferred()
+  const staged = []
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle')) {
+      staged.push(data[0])
+      if (data[0] === 1) {
+        writing.resolve()
+        await release.promise
+      }
+    }
+    return writeFile(target, data)
+  })
+
+  const first = bundles.save(b4a.from([1]), '4.24.0')
+  await writing.promise
+  const second = bundles.save(b4a.from([2]), '4.25.0')
+  const latest = bundles.save(b4a.from([3]), '4.26.0')
+  const applying = bundles.apply()
+  release.resolve()
+
+  t.alike(await Promise.all([first, second, latest, applying]), [true, true, true, true])
+  t.alike(staged, [1, 3])
+  t.is(await bundles.savedVersion(), '4.26.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([3])))
+  t.is(await bundles.apply(), false)
+})
+
+test('concurrent applies commit a staged bundle only once', async (t) => {
+  const root = await t.tmp()
+  const committing = deferred()
+  const release = deferred()
+  let commits = 0
+  const bundles = new BundlePersist({ root })
+  const commitDir = stub(t, 'commitDir', async (from, to) => {
+    commits++
+    committing.resolve()
+    await release.promise
+    return commitDir(from, to)
+  })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  const first = bundles.apply()
+  await committing.promise
+  const second = bundles.apply()
+  release.resolve()
+
+  t.alike(await Promise.all([first, second]), [true, false])
+  t.is(commits, 1)
+  t.is(await bundles.savedVersion(), '4.24.0')
+})
+
+test('apply and a pending save both report staging failure and recover', async (t) => {
+  const root = await t.tmp()
+  const writing = deferred()
+  const release = deferred()
+  const bundles = new BundlePersist({ root })
+  const writeFile = stub(t, 'writeFile', async (target, data) => {
+    if (target.endsWith('app.bundle') && data[0] === 4) {
+      writing.resolve()
+      await release.promise
+    }
+    if (target.endsWith('app.bundle') && data[0] === 5) throw new Error('write failed')
+    return writeFile(target, data)
+  })
+
+  await bundles.save(BUNDLE, '4.24.0', { assets: { 'assets/old.png': b4a.from([9]) } })
+  await bundles.apply()
+  const first = bundles.save(b4a.from([4]), '4.25.0')
+  await writing.promise
+  const saving = t.exception(bundles.save(b4a.from([5]), '4.26.0'), /write failed/)
+  const applying = t.exception(bundles.apply(), /write failed/)
+  release.resolve()
+  await Promise.all([first, saving, applying])
+
+  t.is(await bundles.apply(), false)
+  t.is(await bundles.savedVersion(), '4.24.0')
+  t.ok(b4a.equals(await read(root, 'assets/old.png'), b4a.from([9])))
+
+  await bundles.save(b4a.from([6]), '4.27.0')
+  t.is(await bundles.apply(), true)
+  t.is(await bundles.savedVersion(), '4.27.0')
+})
+
+test('a failed apply cannot swap the previous bundle back on retry', async (t) => {
+  const root = await t.tmp()
+  let fail = false
+  const bundles = new BundlePersist({ root })
+  const commitDir = stub(t, 'commitDir', async (from, to) => {
+    if (!fail) return commitDir(from, to)
+    const previous = path.join(root, 'previous')
+    await fs.rename(to, previous)
+    await fs.rename(from, to)
+    await fs.rename(previous, from)
+    throw new Error('swap cleanup failed')
+  })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+  await bundles.save(b4a.from([4]), '4.25.0')
+  fail = true
+  await t.exception(bundles.apply(), /swap cleanup failed/)
+  t.is(await bundles.apply(), false)
+  t.is(await bundles.savedVersion(), '4.25.0')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), b4a.from([4])))
+
+  fail = false
+  await bundles.save(b4a.from([5]), '4.26.0')
+  t.is(await bundles.apply(), true)
+  t.is(await bundles.savedVersion(), '4.26.0')
+})
+
+test('savedVersion is null when nothing is stored', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  t.is(await bundles.savedVersion(), null)
+})
+
+test('savedVersion is null when the manifest is missing', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+  await fs.rm(path.join(root, 'bundle_persist', 'manifest.json'))
+
+  t.is(await bundles.savedVersion(), null)
+})
+
+test('savedVersion is null when the manifest is unusable', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+
+  for (const manifest of ['{not json', '{}', JSON.stringify({ version: 'latest' })]) {
+    await fs.writeFile(path.join(root, 'bundle_persist', 'manifest.json'), manifest)
+    t.is(await bundles.savedVersion(), null, manifest)
+  }
+})
+
+test('savedVersion is null when the bundle is missing', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+  await fs.rm(path.join(root, 'bundle_persist', 'app.bundle'))
+
+  t.is(await bundles.savedVersion(), null)
+})
+
+test('an interrupted save leaves the previous update in place', async (t) => {
+  const root = await t.tmp()
+  const bundles = new BundlePersist({ root })
+
+  await bundles.save(BUNDLE, '4.24.0')
+  await bundles.apply()
+
+  const writeFile = stub(t, 'writeFile', (target, data) => {
+    if (target.endsWith('manifest.json')) throw new Error('interrupted')
+    return writeFile(target, data)
+  })
+
+  const interrupted = new BundlePersist({ root })
+  await t.exception(interrupted.save(b4a.from([4]), '4.25.0'), /interrupted/)
+  t.is(await interrupted.apply(), false)
+
+  t.is(await bundles.savedVersion(), '4.24.0', 'the stored update survived')
+  t.ok(b4a.equals(await read(root, 'app.bundle'), BUNDLE))
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+test('default root uses Bare persistent storage', (t) => {
+  t.is(new BundlePersist().root, require('bare-storage').persistent())
+})
+
+async function exists(target) {
+  try {
+    await fs.stat(target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function stub(t, method, replacement) {
+  const original = io[method]
+  io[method] = replacement
+  t.teardown(() => {
+    io[method] = original
+  })
+  return original
+}

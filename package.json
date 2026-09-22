@@ -1,0 +1,51 @@
+{
+  "name": "bundle-persist",
+  "version": "0.0.1",
+  "description": "Stages and applies bundles and assets from Bare",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "scripts": {
+    "format": "prettier --write .",
+    "test": "prettier --check . && lunte && npm run test:bare",
+    "lint": "lunte",
+    "test:bare": "brittle-bare test/index.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/bundle-persist.git"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "bare-fs": "^4.8.1",
+    "bare-path": "^3.1.2",
+    "bare-semver": "^1.1.0",
+    "bare-storage": "^1.1.0",
+    "debounceify": "^1.1.0",
+    "fs-native-extensions": "^1.5.1"
+  },
+  "devDependencies": {
+    "b4a": "^1.9.0",
+    "brittle": "^4.2.0",
+    "lunte": "^1.6.0",
+    "prettier": "^3.8.1",
+    "prettier-config-holepunch": "^2.0.0"
+  },
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "keywords": [],
+  "author": "",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/holepunchto/bundle-persist/issues"
+  },
+  "homepage": "https://github.com/holepunchto/bundle-persist#readme"
+}

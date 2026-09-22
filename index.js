@@ -1,0 +1,109 @@
+'use strict'
+
+const { Version } = require('bare-semver')
+const debounceify = require('debounceify')
+const fs = require('./lib/fs')
+
+module.exports = class BundlePersist {
+  constructor(opts = {}) {
+    if (opts.currentVersion !== undefined && !isValidVersion(opts.currentVersion)) {
+      throw new Error(`Invalid current version: ${opts.currentVersion}`)
+    }
+
+    this.currentVersion = opts.currentVersion
+    this.root = opts.root || fs.root()
+    this.payloadDir = opts.payloadDir || 'bundle_persist'
+    this.stagingDir = opts.stagingDir || 'bundle_persist.tmp'
+    this.bundleFile = opts.bundleFile || 'app.bundle'
+    this.manifestFile = opts.manifestFile || 'manifest.json'
+    this.dir = fs.join(this.root, this.payloadDir)
+    this._pending = null
+    this._readyToApply = false
+    this._write = debounceify(this._write.bind(this))
+  }
+
+  async save(bundle, version, opts = {}) {
+    const assets = opts.assets || {}
+    const minver = opts.minver
+
+    if (!isValidVersion(version)) {
+      throw new Error(`Invalid bundle version: ${version}`)
+    }
+
+    if (!this.isCompatible(minver)) return false
+
+    this._pending = { bundle, version, minver, assets }
+    await this._write()
+    return true
+  }
+
+  isCompatible(minver) {
+    if (minver === undefined) return true
+    if (!isValidVersion(minver)) throw new Error(`Invalid minimum version: ${minver}`)
+    if (this.currentVersion === undefined) throw new Error('currentVersion is required with minver')
+    return Version.parse(this.currentVersion).compare(Version.parse(minver)) >= 0
+  }
+
+  async apply() {
+    await this._write()
+    if (!this._readyToApply) return false
+
+    this._readyToApply = false
+    await fs.commitDir(fs.join(this.root, this.stagingDir), this.dir)
+    return true
+  }
+
+  async savedVersion() {
+    if (!(await fs.fileExists(fs.join(this.dir, this.bundleFile)))) return null
+
+    const manifest = fs.join(this.dir, this.manifestFile)
+    if (!(await fs.fileExists(manifest))) return null
+
+    try {
+      const { version } = JSON.parse(await fs.readText(manifest))
+      return isValidVersion(version) ? version : null
+    } catch {
+      return null
+    }
+  }
+
+  async _write() {
+    const pending = this._pending
+    if (pending === null) return
+
+    this._pending = null
+    this._readyToApply = false
+
+    const { bundle, version, minver, assets } = pending
+    const staging = fs.join(this.root, this.stagingDir)
+
+    if (await fs.dirExists(staging)) await fs.removeDir(staging)
+    await fs.makeDir(staging)
+    await fs.writeFile(fs.join(staging, this.bundleFile), bundle)
+
+    for (const [path, bytes] of Object.entries(assets)) {
+      const segments = path.split('/')
+      const name = segments.pop()
+      let dir = staging
+      for (const segment of segments) {
+        dir = fs.join(dir, segment)
+        await fs.makeDir(dir)
+      }
+      await fs.writeFile(fs.join(dir, name), bytes)
+    }
+
+    await fs.writeFile(fs.join(staging, this.manifestFile), JSON.stringify({ version, minver }))
+    this._readyToApply = true
+  }
+}
+
+function isValidVersion(version) {
+  if (typeof version !== 'string') return false
+
+  try {
+    Version.parse(version)
+    return true
+  } catch {
+    return false
+  }
+}
